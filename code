@@ -1,0 +1,291 @@
+import pygame
+import requests
+import sys
+
+total_laps = 80
+base_lap_time = 80.0
+
+def get_weather(city="Budapest"):
+    API_KEY = "7a991dd15b6bf86475713ba07add3262"
+    url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
+    try:
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        if "weather" in data and "main" in data:
+            weather_type = data["weather"][0]["main"]
+            temperature = data["main"]["temp"]
+            return weather_type, temperature
+    except:
+        pass
+    return "Unavailable", "N/A"
+
+def get_tyre_life(tyre_name):
+    if tyre_name == "soft":
+        return 15
+    elif tyre_name == "medium":
+        return 25
+    elif tyre_name == "hard":
+        return 40
+    elif tyre_name == "inters":
+        return 30
+    elif tyre_name == "wets":
+        return 40
+    else:
+        return 25
+
+def validate_strategy(strategy):
+    if len(strategy) < 3:
+        return False, "Hungarian GP requires min 2 pit stops (3 stints)!"
+    
+    total_tyre_capacity = sum(get_tyre_life(stint) for stint in strategy)
+    if total_tyre_capacity < total_laps:
+        return False, f"Invalid: Tyres cover {total_tyre_capacity} laps (Need {total_laps} laps)!"
+        
+    return True, "Strategy Validated"
+
+def simulate_strategy(strategy):
+    total_time = 0.0
+    lap = 0
+    fastest_lap_time = float('inf')
+    
+    for stint in strategy:
+        tyre_lap_modifier = 0.0
+        tyre_degradation = 0.0
+        tyre_life = get_tyre_life(stint)
+        
+        if stint == "soft":
+            tyre_lap_modifier = -1.5
+            tyre_degradation = 0.2
+        elif stint == "medium":
+            tyre_lap_modifier = 0.0
+            tyre_degradation = 0.1
+        elif stint == "hard":
+            tyre_lap_modifier = 1.0
+            tyre_degradation = 0.05
+        elif stint == "inters":
+            tyre_lap_modifier = 3.0
+            tyre_degradation = 0.15
+        elif stint == "wets":
+            tyre_lap_modifier = 6.0
+            tyre_degradation = 0.1
+        else:
+            tyre_lap_modifier = 0.0
+            tyre_degradation = 0.1
+            
+        for i in range(tyre_life):
+            if lap >= total_laps:
+                break
+            lap_time = base_lap_time + tyre_lap_modifier + (i * tyre_degradation)
+            total_time = total_time + lap_time
+            
+            if lap_time < fastest_lap_time:
+                fastest_lap_time = lap_time
+                
+            lap = lap + 1
+            
+    return total_time, lap, fastest_lap_time
+
+TRACK_WAYPOINTS = [
+    (100, 450), (400, 450), (500, 400), (550, 300), (500, 200),
+    (400, 150), (250, 150), (200, 200), (150, 300), (250, 350),
+    (350, 300), (450, 250), (550, 150), (650, 100), (700, 200),
+    (750, 350), (650, 450), (550, 500), (350, 550), (100, 550)
+]
+
+def get_tyre_properties(tyre_name):
+    if tyre_name == "soft":
+        return 6.5, 0.55
+    elif tyre_name == "hard":
+        return 4.2, 0.04
+    elif tyre_name == "inters":
+        return 3.5, 0.20
+    elif tyre_name == "wets":
+        return 3.0, 0.10
+    else:
+        return 4.8, 0.15
+
+def run_app():
+    pygame.init()
+    screen = pygame.display.set_mode((850, 650))
+    pygame.display.set_caption("FORMULA 1 STRATEGY SIMULATOR BY TAGBOT")
+    clock = pygame.time.Clock()
+
+    font = pygame.font.SysFont("Arial", 16)
+    title_font = pygame.font.SysFont("Arial", 22, bold=True)
+    
+    weather_type, temperature = get_weather("Budapest")
+    
+    # Selection State
+    strategy = []
+    validation_msg = "Select stints (Min 3 stints, 80 laps total)"
+    is_valid = False
+    mode = "SETUP" # "SETUP" or "RACE"
+    
+    # Touch Button Rectangles
+    btn_soft = pygame.Rect(50, 450, 110, 45)
+    btn_med = pygame.Rect(180, 450, 110, 45)
+    btn_hard = pygame.Rect(310, 450, 110, 45)
+    btn_inters = pygame.Rect(440, 450, 110, 45)
+    btn_wets = pygame.Rect(570, 450, 110, 45)
+    
+    btn_clear = pygame.Rect(50, 520, 140, 50)
+    btn_start = pygame.Rect(650, 520, 150, 50)
+
+    # Race Simulation State
+    car1_x, car1_y = 100.0, 450.0
+    car1_target_index = 0
+    car1_laps_completed = 0
+    car1_stint_lap = 0
+    pit_stops_made = 0
+    car1_fastest_lap = float('inf')
+    active_tyre = "medium"
+    car1_base_speed, car1_degradation_rate = 4.8, 0.15
+
+    car2_x, car2_y = 100.0, 450.0
+    car2_target_index = 0
+    car2_laps_completed = 0
+    car2_base_speed, car2_degradation_rate = 4.8, 0.15
+
+    running = True
+    while running:
+        screen.fill((20, 20, 20))
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+                
+            elif event.type in (pygame.MOUSEBUTTONDOWN, getattr(pygame, 'FINGERDOWN', -1)):
+                pos = pygame.mouse.get_pos()
+                
+                if mode == "SETUP":
+                    if btn_soft.collidepoint(pos):
+                        strategy.append("soft")
+                    elif btn_med.collidepoint(pos):
+                        strategy.append("medium")
+                    elif btn_hard.collidepoint(pos):
+                        strategy.append("hard")
+                    elif btn_inters.collidepoint(pos):
+                        strategy.append("inters")
+                    elif btn_wets.collidepoint(pos):
+                        strategy.append("wets")
+                    elif btn_clear.collidepoint(pos):
+                        strategy.clear()
+                    elif btn_start.collidepoint(pos) and is_valid:
+                        mode = "RACE"
+                        active_tyre = strategy[0]
+                        car1_base_speed, car1_degradation_rate = get_tyre_properties(active_tyre)
+                    
+                    is_valid, validation_msg = validate_strategy(strategy)
+
+        if mode == "SETUP":
+            # Render UI Selection Menu
+            hud_title = title_font.render("FORMULA 1 STRATEGY SIMULATOR - TAGBOT", True, (255, 255, 255))
+            screen.blit(hud_title, (20, 20))
+            
+            strat_str = " -> ".join([s.upper() for s in strategy]) if strategy else "None"
+            strat_text = font.render(f"Current Strategy: {strat_str}", True, (255, 255, 100))
+            screen.blit(strat_text, (50, 100))
+            
+            status_color = (100, 255, 100) if is_valid else (255, 100, 100)
+            val_text = font.render(f"Status: {validation_msg}", True, status_color)
+            screen.blit(val_text, (50, 130))
+            
+            weather_text = font.render(f"🌤️ Budapest Live Weather: {weather_type} ({temperature}°C)", True, (200, 200, 200))
+            screen.blit(weather_text, (50, 170))
+
+            # Draw Tyre Choice Buttons
+            pygame.draw.rect(screen, (220, 50, 50), btn_soft, border_radius=8)
+            screen.blit(font.render("SOFT (+15L)", True, (255, 255, 255)), (btn_soft.x + 10, btn_soft.y + 12))
+
+            pygame.draw.rect(screen, (220, 220, 50), btn_med, border_radius=8)
+            screen.blit(font.render("MED (+25L)", True, (0, 0, 0)), (btn_med.x + 10, btn_med.y + 12))
+
+            pygame.draw.rect(screen, (220, 220, 220), btn_hard, border_radius=8)
+            screen.blit(font.render("HARD (+40L)", True, (0, 0, 0)), (btn_hard.x + 10, btn_hard.y + 12))
+
+            pygame.draw.rect(screen, (50, 180, 50), btn_inters, border_radius=8)
+            screen.blit(font.render("INT (+30L)", True, (255, 255, 255)), (btn_inters.x + 10, btn_inters.y + 12))
+
+            pygame.draw.rect(screen, (50, 100, 220), btn_wets, border_radius=8)
+            screen.blit(font.render("WET (+40L)", True, (255, 255, 255)), (btn_wets.x + 10, btn_wets.y + 12))
+
+            # Clear & Start Buttons
+            pygame.draw.rect(screen, (100, 100, 100), btn_clear, border_radius=8)
+            screen.blit(font.render("CLEAR", True, (255, 255, 255)), (btn_clear.x + 40, btn_clear.y + 15))
+
+            start_color = (40, 200, 40) if is_valid else (60, 60, 60)
+            pygame.draw.rect(screen, start_color, btn_start, border_radius=8)
+            screen.blit(font.render("START RACE", True, (255, 255, 255)), (btn_start.x + 25, btn_start.y + 15))
+
+        elif mode == "RACE":
+            # Track Visualization
+            pygame.draw.lines(screen, (100, 100, 100), True, TRACK_WAYPOINTS, 25)
+            pygame.draw.lines(screen, (255, 255, 255), True, TRACK_WAYPOINTS, 1)
+
+            car1_current_speed = car1_base_speed - (car1_stint_lap * car1_degradation_rate)
+            car2_current_speed = car2_base_speed - (car2_laps_completed * car2_degradation_rate)
+
+            if car1_current_speed < 1.0: car1_current_speed = 1.0
+            if car2_current_speed < 1.0: car2_current_speed = 1.0
+
+            # Car 1 Movement (3 Demo Laps Visualized)
+            if car1_laps_completed < 3:
+                target1 = TRACK_WAYPOINTS[car1_target_index]
+                if car1_x < target1[0]: car1_x += car1_current_speed
+                elif car1_x > target1[0]: car1_x -= car1_current_speed
+                if car1_y < target1[1]: car1_y += car1_current_speed
+                elif car1_y > target1[1]: car1_y -= car1_current_speed
+
+                if abs(car1_x - target1[0]) < 6 and abs(car1_y - target1[1]) < 6:
+                    car1_target_index += 1
+                    if car1_target_index >= len(TRACK_WAYPOINTS):
+                        car1_target_index = 0
+                        car1_laps_completed += 1
+                        
+                        current_lap_time = base_lap_time + (car1_stint_lap * car1_degradation_rate * 10)
+                        if current_lap_time < car1_fastest_lap:
+                            car1_fastest_lap = current_lap_time
+                        
+                        car1_stint_lap += 1
+                        if car1_laps_completed < len(strategy):
+                            new_tyre = strategy[car1_laps_completed]
+                            if new_tyre != active_tyre: pit_stops_made += 1
+                            active_tyre = new_tyre
+                            car1_base_speed, car1_degradation_rate = get_tyre_properties(active_tyre)
+                            car1_stint_lap = 0
+
+            # Car 2 Movement
+            if car2_laps_completed < 3:
+                target2 = TRACK_WAYPOINTS[car2_target_index]
+                if car2_x < target2[0]: car2_x += car2_current_speed
+                elif car2_x > target2[0]: car2_x -= car2_current_speed
+                if car2_y < target2[1]: car2_y += car2_current_speed
+                elif car2_y > target2[1]: car2_y -= car2_current_speed
+
+                if abs(car2_x - target2[0]) < 6 and abs(car2_y - target2[1]) < 6:
+                    car2_target_index += 1
+                    if car2_target_index >= len(TRACK_WAYPOINTS):
+                        car2_target_index = 0
+                        car2_laps_completed += 1
+
+            pygame.draw.circle(screen, (0, 0, 255), (int(car1_x), int(car1_y)), 10)
+            pygame.draw.circle(screen, (0, 255, 0), (int(car2_x), int(car2_y)), 10)
+
+            # Telemetry HUD
+            hud_title = title_font.render("FORMULA 1 STRATEGY SIMULATOR BY TAGBOT", True, (255, 255, 255))
+            car1_text = font.render(f"🔵 Your Car [{active_tyre.upper()}] | Pit Stops: {pit_stops_made}/2 | Fastest Lap: {round(car1_fastest_lap, 2) if car1_fastest_lap != float('inf') else '--'}s", True, (100, 150, 255))
+            car2_text = font.render(f"🟢 Rival Car [MEDIUM] | Lap: {car2_laps_completed}/3", True, (100, 255, 100))
+            weather_text = font.render(f"🌤️ Budapest Weather: {weather_type} ({temperature}°C)", True, (200, 200, 200))
+
+            screen.blit(hud_title, (20, 20))
+            screen.blit(car1_text, (20, 50))
+            screen.blit(car2_text, (20, 75))
+            screen.blit(weather_text, (20, 605))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+    pygame.quit()
+
+if __name__ == "__main__":
+    run_app()
